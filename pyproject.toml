@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qrzterm"
+version = "0.10"
+description = "Terminal app for QRZ.com callsign lookup and logging"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "KC2RGW Chris Esser", email = "kc2rgw@gmail.com" }]
+keywords = ["qrz", "hamradio", "amateur-radio", "tui"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Ham Radio",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pillow>=10.3",
+    "textual>=8",
+    "textual-image[textual]>=0.14.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/kingsqueak/QRZterm"
+
+[project.scripts]
+qrzterm = "qrzterm.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
