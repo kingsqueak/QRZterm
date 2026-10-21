@@ -17,6 +17,13 @@ from qrzterm.qrz import (
     field_display_value,
     field_label,
     field_rank,
+    full_name,
+    grid_center,
+    grouped_fields,
+    local_time,
+    path_from,
+    qth_line,
+    split_groups,
     form_encode,
     format_mhz,
     latest_qso,
@@ -282,3 +289,55 @@ def test_prepare_qso_uses_lookup_and_rejects_a_bad_frequency():
         assert "outside the amateur bands" in str(exc)
     else:
         raise AssertionError("expected LogInputError")
+
+
+def _record(**fields: str) -> LookupResponse:
+    return LookupResponse(callsign=[Field(name, value) for name, value in fields.items()])
+
+
+def test_groups_fields_and_drops_name_parts():
+    record = _record(call="AA7BQ", fname="Fred", name="Lloyd", grid="DM32af", lotw="1", newthing="x")
+    groups = grouped_fields(record)
+    assert [title for title, _items in groups] == ["Operator", "On the air", "QSL", "Other"]
+    operator = [(item.name, item.value) for item in groups[0][1]]
+    assert operator == [("call", "AA7BQ"), ("name_fmt", "Fred Lloyd")]
+    assert full_name(record) == "Fred Lloyd"
+    assert full_name(_record(name_fmt='Fred "FL" Lloyd', fname="Fred")) == 'Fred "FL" Lloyd'
+
+
+def test_split_groups_cuts_at_a_group_edge():
+    groups = [("A", [Field("a", "1")] * 5), ("B", [Field("b", "1")] * 2), ("C", [Field("c", "1")] * 4)]
+    left, right = split_groups(groups)
+    assert (len(left), len(right)) == (5, 6)
+    assert split_groups([]) == ([], [])
+
+
+def test_qth_line():
+    record = _record(addr2="Concord", state="NH", zip="03301", county="Merrimack", country="United States")
+    assert qth_line(record) == "Concord, NH 03301 · Merrimack County · United States"
+    assert qth_line(_record(country="Japan")) == "Japan"
+
+
+def test_grid_center_and_path():
+    lat, lon = grid_center("FN43cb")
+    assert lat == 43.0625 and abs(lon - (-72 + 5 / 24)) < 1e-9
+    assert grid_center("FN43") == (43.5, -71.0)
+    assert grid_center("ZZ99") is None
+    assert grid_center("FN4") is None
+    tokyo = _record(lat="35.694", lon="139.770")
+    assert path_from("FN43cb", tokyo).endswith("at 335°")
+    assert path_from("FN43cb", tokyo).startswith("10,69")
+    assert path_from("", tokyo) == ""
+    assert path_from("FN43cb", _record(grid="FN43cb")).startswith("0 km")
+
+
+def test_local_time():
+    summer = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+    winter = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    eastern = _record(TimeZone="Eastern", GMTOffset="-5", DST="Y")
+    assert local_time(eastern, summer) == "08:00 (UTC−4)"
+    assert local_time(eastern, winter) == "07:00 (UTC−5)"
+    assert local_time(_record(GMTOffset="9", DST="N"), summer) == "21:00 (UTC+9)"
+    assert local_time(_record(GMTOffset="5.5", DST="N"), summer) == "17:30 (UTC+5:30)"
+    assert local_time(_record(GMTOffset="1", DST="Y"), summer) == "13:00 (UTC+1, standard time)"
+    assert local_time(_record(), summer) == ""

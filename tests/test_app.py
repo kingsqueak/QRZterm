@@ -112,11 +112,19 @@ async def test_lookup_shows_fields_photo_and_worked_badge():
         await _settle(pilot, lambda: app.badge_kind == "worked" and app.query_one("#photo").display)
         assert "AA7BQ found." in app.status_text
         assert "Lookups in the last 24 h: 4" in app.status_text
-        table = app.query_one("#fields")
-        rows = [tuple(str(cell) for cell in table.get_row_at(index)) for index in range(table.row_count)]
+        rows = []
+        for table_id in ("#fields", "#fields-2"):
+            table = app.query_one(table_id)
+            rows += [tuple(str(cell) for cell in table.get_row_at(index)) for index in range(table.row_count)]
         assert rows[0] == ("Callsign", "AA7BQ")
+        assert ("Name", "Fred Lloyd") in rows
         assert ("LoTW", "Yes") in rows
         assert ("Grid", "DM32af") in rows
+        assert not any(label in {"First name", "Last name"} for label, _value in rows)
+        assert app.query_one("#fields-2").row_count > 0
+        banner = app.query_one("#banner")
+        assert "empty" not in banner.classes
+        assert "Phoenix, AZ" in "".join(segment.text for segment in app.console.render(banner.content))
         assert app.query_one("#badge").content == "WORKED"
         assert "Last worked 2025-01-01 12:00 UTC" in str(app.query_one("#worked").content)
         assert "2 QSOs in your log" in str(app.query_one("#worked").content)
@@ -182,6 +190,7 @@ async def test_account_screen_saves_a_private_file(tmp_path):
         screen.query_one("#password").value = "new-secret"
         screen.query_one("#station").value = "kc2rgw"
         screen.query_one("#key").value = "abc123"
+        screen.query_one("#grid").value = "fn43CB"
         await pilot.click("#save")
         await _settle(pilot, lambda: path.exists())
         loaded = load_account(path)
@@ -189,6 +198,7 @@ async def test_account_screen_saves_a_private_file(tmp_path):
         assert loaded.password == "new-secret"
         assert loaded.station_call == "KC2RGW"
         assert loaded.logbook_key == "abc123"
+        assert loaded.grid == "FN43cb"
         assert fake.logbook_key == "abc123"
 
 

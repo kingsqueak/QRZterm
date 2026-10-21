@@ -23,6 +23,7 @@ class Account:
     remember_password: bool = True
     station_call: str = ""
     logbook_key: str = ""
+    grid: str = ""
 
 
 def config_path() -> Path:
@@ -59,6 +60,7 @@ def load_account(path: Path | None = None) -> Account:
         remember_password=remember,
         station_call=str(data.get("station_call", "")).strip().upper(),
         logbook_key=str(data.get("logbook_key", "")).strip(),
+        grid=str(data.get("grid", "")).strip(),
     )
 
 
@@ -71,6 +73,7 @@ def save_account(account: Account, path: Path | None = None) -> None:
         "remember_password": bool(account.remember_password),
         "station_call": account.station_call.strip().upper(),
         "logbook_key": account.logbook_key.strip(),
+        "grid": account.grid.strip(),
     }
     if account.remember_password:
         payload["password"] = account.password

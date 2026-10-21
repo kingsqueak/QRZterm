@@ -14,6 +14,8 @@ from datetime import timezone
 
 from PIL import Image as PILImage
 from PIL import UnidentifiedImageError
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -33,13 +35,18 @@ from qrzterm.qrz import (
     QrzError,
     adif_band,
     adif_record,
-    display_fields,
     field_display_value,
     field_label,
+    full_name,
+    grouped_fields,
+    local_time,
     normalize_url,
     parse_mhz,
+    path_from,
     prepare_qso,
+    qth_line,
     report_for_mode_name,
+    split_groups,
     worked_summary,
 )
 
@@ -53,6 +60,10 @@ BADGE_LABELS = {
     "nokey": "NO KEY",
 }
 BADGE_KINDS = tuple(BADGE_LABELS)
+YES_NO_FIELDS = {"lotw", "eqsl", "mqsl", "DST"}
+LABEL_STYLE = "#9a978c"
+LINK_STYLE = "underline #9ec9ff"
+TABLE_IDS = ("fields", "fields-2")
 
 STATION_THEME = Theme(
     name="station",
@@ -128,6 +139,14 @@ class AccountScreen(ModalScreen[Account | None]):
                 placeholder="Same as the username",
                 id="station",
             )
+            yield Label("Station grid")
+            yield Input(
+                value=self._account.grid,
+                placeholder="Such as FN43cb. Shows distance and heading.",
+                id="grid",
+                max_length=8,
+                restrict=r"[A-Za-z0-9]*",
+            )
             yield Label("Logbook API key")
             yield Input(
                 value=self._account.logbook_key,
@@ -164,6 +183,7 @@ class AccountScreen(ModalScreen[Account | None]):
                     remember_password=self.query_one("#remember", Checkbox).value,
                     station_call=self.query_one("#station", Input).value.strip().upper(),
                     logbook_key=self.query_one("#key", Input).value.strip(),
+                    grid=_normalize_grid(self.query_one("#grid", Input).value),
                 )
             )
 
@@ -275,23 +295,34 @@ class QrzApp(App[None]):
         height: 1fr;
         padding: 0 1 1 1;
     }
-    #fields {
+    #summary-row {
+        height: auto;
+    }
+    #banner {
         width: 1fr;
-        height: 1fr;
+        height: auto;
+        min-height: 12;
+        padding: 0 1;
+        border: round $primary 60%;
+    }
+    #banner.empty {
+        color: $text-muted;
+        border: round #3a4038;
+        content-align: center middle;
     }
     #photo-pane {
         width: 36;
-        height: 1fr;
+        height: auto;
         margin-left: 1;
         align: center top;
     }
     #photo {
         width: 34;
-        height: auto;
+        height: 10;
     }
     #photo-placeholder {
         width: 100%;
-        height: 8;
+        height: 10;
         content-align: center middle;
         color: $text-muted;
         border: round #3a4038;
@@ -299,6 +330,17 @@ class QrzApp(App[None]):
     #open {
         width: 100%;
         margin-top: 1;
+    }
+    #tables {
+        height: 1fr;
+        margin-top: 1;
+    }
+    #tables DataTable {
+        width: 1fr;
+        height: 1fr;
+    }
+    #fields {
+        margin-right: 1;
     }
     """
     BINDINGS = [
@@ -344,6 +386,7 @@ class QrzApp(App[None]):
         self._normalizing = False
         self._last_lookup: LookupResponse | None = None
         self._field_values: dict[str, tuple[str, str]] = {}
+        self._active_table = TABLE_IDS[0]
         self._image_url = ""
         self._just_logged: set[str] = set()
         self.badge_kind = "idle"
@@ -417,23 +460,27 @@ class QrzApp(App[None]):
             yield Input(placeholder="Comment (optional)", id="comment", compact=True)
         yield Static("", id="worked", classes="idle", markup=False)
         yield Static("", id="status", markup=False)
-        with Horizontal(id="results"):
-            yield DataTable(id="fields", cursor_type="row", zebra_stripes=True, show_row_labels=False)
-            with Vertical(id="photo-pane"):
-                yield Static("No photo", id="photo-placeholder", markup=False)
-                photo = self._image_class(id="photo")
-                photo.display = False
-                yield photo
-                yield Button("Open link", id="open", disabled=True, tooltip="Open the highlighted call, email, web page, or image")
+        with Vertical(id="results"):
+            with Horizontal(id="summary-row"):
+                yield Static(EMPTY_BANNER, id="banner", classes="empty", markup=False)
+                with Vertical(id="photo-pane"):
+                    yield Static("No photo", id="photo-placeholder", markup=False)
+                    photo = self._image_class(id="photo")
+                    photo.display = False
+                    yield photo
+                    yield Button("Open link", id="open", disabled=True, compact=True, tooltip="Open the highlighted call, email, web page, or image")
+            with Horizontal(id="tables"):
+                for table_id in TABLE_IDS:
+                    yield DataTable(id=table_id, cursor_type="row", zebra_stripes=True, show_row_labels=False)
         yield Footer()
 
     def on_mount(self) -> None:
         self.register_theme(STATION_THEME)
         self.theme = "station"
         self.sub_title = "QRZ.com"
-        table = self.query_one("#fields", DataTable)
-        table.add_column("Field", width=20, key="field")
-        table.add_column("Value", key="value")
+        for table in self._tables():
+            table.add_column("Field", width=18, key="field")
+            table.add_column("Value", key="value")
         if self.load_warning:
             self._set_status(self.load_warning, error=True)
         call = self.query_one("#call", Input)
@@ -495,10 +542,15 @@ class QrzApp(App[None]):
         self._last_mode = event.value
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        key = event.row_key.value or ""
-        item = self._field_values.get(key)
-        openable = bool(item and item[0] in OPEN_FIELDS and item[1])
-        self.query_one("#open", Button).disabled = not openable
+        if event.data_table.id == self._active_table:
+            self._sync_open(event.data_table)
+
+    def on_descendant_focus(self, event) -> None:
+        # Open link follows whichever field table was used last, so clicking
+        # the button (which takes focus) still opens that table's row.
+        if isinstance(event.widget, DataTable) and event.widget.id in TABLE_IDS:
+            self._active_table = event.widget.id
+            self._sync_open(event.widget)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._open_key(event.row_key.value or "")
@@ -512,6 +564,7 @@ class QrzApp(App[None]):
             remember_password=self.account.remember_password,
             station_call=self.account.station_call,
             logbook_key=self.account.logbook_key,
+            grid=self.account.grid,
         )
         self.push_screen(AccountScreen(draft), self._apply_account)
 
@@ -536,7 +589,7 @@ class QrzApp(App[None]):
         self._start_log()
 
     def action_open_field(self) -> None:
-        table = self.query_one("#fields", DataTable)
+        table = self.query_one(f"#{self._active_table}", DataTable)
         if table.row_count == 0:
             return
         row_key, _column_key = table.coordinate_to_cell_key(table.cursor_coordinate)
@@ -550,6 +603,7 @@ class QrzApp(App[None]):
                 remember_password=self.account.remember_password,
                 station_call=self.account.station_call,
                 logbook_key=self.account.logbook_key,
+                grid=self.account.grid,
             )
         )
 
@@ -656,21 +710,25 @@ class QrzApp(App[None]):
 
     def _show_lookup(self, response: LookupResponse) -> None:
         self._last_lookup = response
-        table = self.query_one("#fields", DataTable)
-        table.clear()
         self._field_values.clear()
         seen: dict[str, int] = {}
-        for item in display_fields(response):
-            key = item.name
-            seen[key] = seen.get(key, 0) + 1
-            if seen[key] > 1:
-                key = f"{item.name}#{seen[key]}"
-            self._field_values[key] = (item.name, item.value)
-            table.add_row(
-                Text(field_label(item.name)),
-                Text(field_display_value(item.name, item.value)),
-                key=key,
-            )
+        columns = split_groups(grouped_fields(response))
+        for table, items in zip(self._tables(), columns):
+            table.clear()
+            for item in items:
+                key = item.name
+                seen[key] = seen.get(key, 0) + 1
+                if seen[key] > 1:
+                    key = f"{item.name}#{seen[key]}"
+                self._field_values[key] = (item.name, item.value)
+                table.add_row(
+                    Text(field_label(item.name), style=LABEL_STYLE),
+                    _value_text(item.name, item.value),
+                    key=key,
+                )
+        banner = self.query_one("#banner", Static)
+        banner.update(_banner(response, self.account.grid))
+        banner.remove_class("empty")
         parts = [f"{response.value('call')} found."]
         if response.message:
             parts.append(response.message)
@@ -771,11 +829,26 @@ class QrzApp(App[None]):
         self._last_lookup = None
         self._image_url = ""
         self._field_values.clear()
-        table = self.query_one("#fields", DataTable)
-        table.clear()
+        for table in self._tables():
+            table.clear()
+        banner = self.query_one("#banner", Static)
+        banner.update(EMPTY_BANNER)
+        banner.add_class("empty")
         self._clear_photo("No photo")
         open_button = self.query_one("#open", Button)
         open_button.disabled = True
+
+    def _tables(self) -> list[DataTable]:
+        return [self.query_one(f"#{table_id}", DataTable) for table_id in TABLE_IDS]
+
+    def _sync_open(self, table: DataTable) -> None:
+        """Enable Open link when the table's current row can be opened."""
+        item = None
+        if table.row_count:
+            row_key, _column_key = table.coordinate_to_cell_key(table.cursor_coordinate)
+            item = self._field_values.get(row_key.value or "")
+        openable = bool(item and item[0] in OPEN_FIELDS and item[1])
+        self.query_one("#open", Button).disabled = not openable
 
     def _clear_photo(self, message: str) -> None:
         photo = self.query_one("#photo")
@@ -820,6 +893,76 @@ class QrzApp(App[None]):
             target = normalize_url(value)
         if not webbrowser.open(target):
             self._set_status(f"Couldn't open {target}", error=True)
+
+
+EMPTY_BANNER = "Look up a callsign to see the station here."
+
+
+def _normalize_grid(text: str) -> str:
+    """FN43CB or fn43cb becomes FN43cb."""
+    text = text.strip()
+    return text[:4].upper() + text[4:].lower()
+
+
+def _value_text(name: str, value: str) -> Text:
+    shown = field_display_value(name, value)
+    if name in YES_NO_FIELDS:
+        return Text(shown, style="#7dffb3" if shown == "Yes" else "#8d8a80")
+    if name == "call":
+        return Text(shown, style="bold")
+    if name in OPEN_FIELDS:
+        return Text(shown, style=LINK_STYLE)
+    return Text(shown)
+
+
+def _banner(response: LookupResponse, my_grid: str) -> Group:
+    """The callsign, name, and what an operator glances at during a QSO."""
+    head = Text()
+    head.append(f" {response.value('call')} ", style="bold reverse #9ec9ff")
+    name = full_name(response)
+    if name:
+        head.append("  ")
+        head.append(name, style="bold")
+    if response.value("xref"):
+        head.append(f"   looked up as {response.value('xref')}", style="#8d8a80")
+
+    zones = " · ".join(
+        f"{label} {response.value(name)}"
+        for label, name in (("CQ", "cqzone"), ("ITU", "ituzone"), ("IOTA", "iota"))
+        if response.value(name)
+    )
+    land = response.value("land")
+    if land and response.value("dxcc"):
+        land += f" ({response.value('dxcc')})"
+    qsl = Text()
+    for name, label in (("lotw", "LoTW"), ("eqsl", "eQSL"), ("mqsl", "Paper")):
+        if response.value(name):
+            yes = field_display_value(name, response.value(name)) == "Yes"
+            qsl.append(f"{label} ", style=LABEL_STYLE)
+            qsl.append("✓  " if yes else "✗  ", style="#7dffb3" if yes else "#8d8a80")
+    license_parts = []
+    if response.value("class"):
+        license_parts.append(f"Class {response.value('class')}")
+    if response.value("expdate"):
+        license_parts.append(f"expires {response.value('expdate')}")
+
+    facts = Table.grid(padding=(0, 1))
+    facts.add_column(style=LABEL_STYLE, width=10, no_wrap=True)
+    facts.add_column(overflow="fold")
+    for label, value in (
+        ("QTH", qth_line(response)),
+        ("Grid", response.value("grid")),
+        ("DXCC", " · ".join(part for part in (land, zones) if part)),
+        ("Local time", local_time(response)),
+        ("Path", path_from(my_grid, response)),
+        ("QSL", qsl),
+        ("License", " · ".join(license_parts)),
+    ):
+        if value:
+            facts.add_row(label, value)
+    if response.message:
+        facts.add_row("Note", Text(response.message, style="#e0a030"))
+    return Group(head, Text(""), facts)
 
 
 def _image_widget(renderer: str):

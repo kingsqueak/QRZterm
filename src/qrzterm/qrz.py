@@ -12,11 +12,13 @@ parser does and what QRZ's logbook answers need.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote, unquote_to_bytes
 import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -235,6 +237,150 @@ def display_fields(response: LookupResponse) -> list[Field]:
     """Spec order, then any field QRZ adds later, in the order it was sent."""
     present = [item for item in response.callsign if item.value]
     return sorted(present, key=lambda item: field_rank(item.name))
+
+
+# How the field tables are grouped. A field QRZ adds later goes in "Other".
+FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Operator", ("call", "xref", "aliases", "p_call", "name_fmt", "nickname", "born", "attn")),
+    ("Address", ("addr1", "addr2", "state", "zip", "county", "country", "fips", "MSA", "AreaCode")),
+    ("On the air", ("grid", "land", "dxcc", "ccode", "cqzone", "ituzone", "iota", "lat", "lon", "geoloc",
+                    "TimeZone", "GMTOffset", "DST")),
+    ("License", ("class", "codes", "efdate", "expdate")),
+    ("QSL", ("qslmgr", "lotw", "eqsl", "mqsl", "email", "url")),
+    ("QRZ record", ("u_views", "bio", "biodate", "moddate", "image", "imageinfo", "user", "serial")),
+)
+# The name parts repeat Name (name_fmt), which is built from them when QRZ
+# leaves it out.
+_NAME_PARTS = {"fname", "name"}
+
+# QRZ's TimeZone names for US zones that observe DST. Elsewhere QRZ gives no
+# zone, so only the standard offset is known.
+_US_ZONES = {
+    "Eastern": "America/New_York",
+    "Central": "America/Chicago",
+    "Mountain": "America/Denver",
+    "Pacific": "America/Los_Angeles",
+    "Alaska": "America/Anchorage",
+    "Hawaii": "Pacific/Honolulu",
+    "Atlantic": "America/Puerto_Rico",
+}
+
+
+def full_name(response: LookupResponse) -> str:
+    formatted = response.value("name_fmt")
+    if formatted:
+        return formatted
+    return " ".join(part for part in (response.value("fname"), response.value("name")) if part)
+
+
+def qth_line(response: LookupResponse) -> str:
+    """City, state and postal code, county, and country on one line."""
+    state_zip = " ".join(part for part in (response.value("state"), response.value("zip")) if part)
+    place = ", ".join(part for part in (response.value("addr2"), state_zip) if part)
+    county = f"{response.value('county')} County" if response.value("county") else ""
+    return " · ".join(part for part in (place, county, response.value("country")) if part)
+
+
+def grouped_fields(response: LookupResponse) -> list[tuple[str, list[Field]]]:
+    """display_fields() sorted into FIELD_GROUPS, without the name parts."""
+    present = display_fields(response)
+    by_name = {item.name: item for item in present}
+    if "name_fmt" not in by_name and full_name(response):
+        by_name["name_fmt"] = Field("name_fmt", full_name(response))
+    grouped: list[tuple[str, list[Field]]] = []
+    used = set(_NAME_PARTS)
+    for title, names in FIELD_GROUPS:
+        items = [by_name[name] for name in names if name in by_name]
+        used.update(names)
+        if items:
+            grouped.append((title, items))
+    other = [item for item in present if item.name not in used]
+    if other:
+        grouped.append(("Other", other))
+    return grouped
+
+
+def split_groups(groups: list[tuple[str, list[Field]]]) -> tuple[list[Field], list[Field]]:
+    """Two columns of fields, split at the group edge nearest the middle."""
+    flat = [item for _title, items in groups for item in items]
+    edges = [0]
+    for _title, items in groups:
+        edges.append(edges[-1] + len(items))
+    cut = min(edges, key=lambda edge: (abs(2 * edge - len(flat)), -edge))
+    return flat[:cut], flat[cut:]
+
+
+def grid_center(grid: str) -> tuple[float, float] | None:
+    """Latitude and longitude of the middle of a 4- or 6-character locator."""
+    g = grid.strip()
+    if len(g) not in {4, 6, 8}:
+        return None
+    field_lon, field_lat = g[0].upper(), g[1].upper()
+    if not ("A" <= field_lon <= "R" and "A" <= field_lat <= "R" and g[2:4].isdigit()):
+        return None
+    lon = (ord(field_lon) - 65) * 20 - 180 + int(g[2]) * 2
+    lat = (ord(field_lat) - 65) * 10 - 90 + int(g[3])
+    if len(g) >= 6:
+        sub_lon, sub_lat = g[4].lower(), g[5].lower()
+        if not ("a" <= sub_lon <= "x" and "a" <= sub_lat <= "x"):
+            return None
+        return lat + (ord(sub_lat) - 97) / 24 + 1 / 48, lon + (ord(sub_lon) - 97) / 12 + 1 / 24
+    return lat + 0.5, lon + 1
+
+
+def station_position(response: LookupResponse) -> tuple[float, float] | None:
+    try:
+        lat, lon = float(response.value("lat")), float(response.value("lon"))
+    except ValueError:
+        return grid_center(response.value("grid"))
+    if -90 <= lat <= 90 and -180 <= lon <= 180:
+        return lat, lon
+    return grid_center(response.value("grid"))
+
+
+def path_from(my_grid: str, response: LookupResponse) -> str:
+    """Great-circle distance and beam heading from my_grid, or "" if unknown."""
+    here = grid_center(my_grid)
+    there = station_position(response)
+    if here is None or there is None:
+        return ""
+    lat1, lon1, lat2, lon2 = map(math.radians, (*here, *there))
+    cos_d = math.sin(lat1) * math.sin(lat2) + math.cos(lat1) * math.cos(lat2) * math.cos(lon2 - lon1)
+    km = math.acos(max(-1.0, min(1.0, cos_d))) * 6371.0
+    y = math.sin(lon2 - lon1) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(lon2 - lon1)
+    bearing = (math.degrees(math.atan2(y, x)) + 360) % 360
+    return f"{km:,.0f} km / {km * 0.621371:,.0f} mi at {bearing:.0f}°"
+
+
+def local_time(response: LookupResponse, now: datetime | None = None) -> str:
+    """The station's clock, such as "07:12 (UTC−4)", or "" if unknown."""
+    now = now or datetime.now(timezone.utc)
+    zone_name = _US_ZONES.get(response.value("TimeZone"))
+    if zone_name and response.value("DST") in {"Y", "1"}:
+        try:
+            there = now.astimezone(ZoneInfo(zone_name))
+        except ZoneInfoNotFoundError:
+            there = None
+        if there is not None:
+            offset = there.utcoffset().total_seconds() / 3600
+            return f"{there:%H:%M} ({_utc_offset(offset)})"
+    try:
+        offset = float(response.value("GMTOffset"))
+    except ValueError:
+        return ""
+    if not -12 <= offset <= 14:
+        return ""
+    there = now + timedelta(hours=offset)
+    note = ", standard time" if response.value("DST") in {"Y", "1"} else ""
+    return f"{there:%H:%M} ({_utc_offset(offset)}{note})"
+
+
+def _utc_offset(hours: float) -> str:
+    sign = "+" if hours >= 0 else "−"
+    whole = int(abs(hours))
+    minutes = round((abs(hours) - whole) * 60)
+    return f"UTC{sign}{whole}" + (f":{minutes:02d}" if minutes else "")
 
 
 def _local(tag: str) -> str:

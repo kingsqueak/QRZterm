@@ -39,12 +39,12 @@ On Debian or Ubuntu, install `python3-venv` first if `python3 -m venv` says the 
 
 ## What you can do
 
-- Type a callsign and press Enter, or **Look Up** (F2). Every field QRZ returns is listed. LoTW, eQSL, and paper QSL show as Yes or No.
-- The station photo is drawn beside the list when QRZ sends an image URL. **Open link** opens the callsign page, an email address, a web page, or the image.
+- Type a callsign and press Enter, or **Look Up** (F2). A banner shows the name, QTH, grid, DXCC entity and zones, the station's local time, and which QSL methods it uses. With your station grid set under Account, it also shows the distance and beam heading. Every field QRZ returns is listed below the banner in two tables, grouped by operator, address, on the air, license, QSL, and QRZ record. LoTW, eQSL, and paper QSL show as Yes or No.
+- The station photo is drawn beside the banner when QRZ sends an image URL. **Open link** opens the callsign page, an email address, a web page, or the image, from the row picked in either table.
 - With a logbook API key, each lookup checks your QRZ log. A call you have worked turns the callsign and the badge green and shows the date, band, and mode of the last QSO, plus how many you have logged. Otherwise the badge says **NOT IN LOG**.
 - **Log Contact** (F5) uploads the QSO. The band comes from the frequency. USB and LSB are logged as SSB with that sideband. FT4 is logged as MFSK FT4, and PSK31 as PSK PSK31. The time is the current UTC time. Name, city, grid, DXCC, state, county, and zones are copied from the lookup when it is the same call.
 - A whole number of 1000 or more in the frequency box is read as kilohertz (`14074`). A number with a decimal point is megahertz (`14.195`). **RX** is the receive frequency when you are split. Leave it blank otherwise.
-- **Account…** (F3) holds the QRZ username and password, the station callsign, and the logbook API key.
+- **Account…** (F3) holds the QRZ username and password, the station callsign, your station grid, and the logbook API key.
 
 Lookups use the [QRZ XML data service](https://www.qrz.com/docs/xml/current_spec.html). Without an XML subscription, QRZ returns only part of each record. Logging uses the [Logbook API](https://www.qrz.com/docs/logbook/QRZLogbookAPI.html) and needs a QRZ subscription. The key is under the logbook's Settings, then API. Each station callsign has its own logbook and key.
 

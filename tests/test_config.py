@@ -14,6 +14,7 @@ def test_round_trip_and_private_mode(tmp_path):
             remember_password=True,
             station_call="kc2rgw",
             logbook_key="abc",
+            grid="FN43cb",
         ),
         path,
     )
@@ -24,6 +25,7 @@ def test_round_trip_and_private_mode(tmp_path):
     assert loaded.password == "secret"
     assert loaded.station_call == "KC2RGW"
     assert loaded.logbook_key == "abc"
+    assert loaded.grid == "FN43cb"
     assert station_callsign(loaded) == "KC2RGW"
 
 
