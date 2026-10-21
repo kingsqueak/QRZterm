@@ -41,6 +41,7 @@ KNOWN_FIELDS: tuple[tuple[str, str], ...] = (
     ("nickname", "Nickname"),
     ("born", "Born"),
     ("attn", "Attention"),
+    ("trustee", "Trustee"),
     ("addr1", "Address"),
     ("addr2", "City"),
     ("state", "State"),
@@ -241,7 +242,7 @@ def display_fields(response: LookupResponse) -> list[Field]:
 
 # How the field tables are grouped. A field QRZ adds later goes in "Other".
 FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Operator", ("call", "xref", "aliases", "p_call", "name_fmt", "nickname", "born", "attn")),
+    ("Operator", ("call", "xref", "aliases", "p_call", "name_fmt", "nickname", "born", "attn", "trustee")),
     ("Address", ("addr1", "addr2", "state", "zip", "county", "country", "fips", "MSA", "AreaCode")),
     ("On the air", ("grid", "land", "dxcc", "ccode", "cqzone", "ituzone", "iota", "lat", "lon", "geoloc",
                     "TimeZone", "GMTOffset", "DST")),

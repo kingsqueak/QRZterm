@@ -302,6 +302,8 @@ def test_groups_fields_and_drops_name_parts():
     operator = [(item.name, item.value) for item in groups[0][1]]
     assert operator == [("call", "AA7BQ"), ("name_fmt", "Fred Lloyd")]
     assert full_name(record) == "Fred Lloyd"
+    club = grouped_fields(_record(call="W1AW", name_fmt="ARRL HQ OPERATORS CLUB", trustee="AF5ID"))
+    assert [(item.name, field_label(item.name)) for item in club[0][1]][-1] == ("trustee", "Trustee")
     assert full_name(_record(name_fmt='Fred "FL" Lloyd', fname="Fred")) == 'Fred "FL" Lloyd'
 
 
