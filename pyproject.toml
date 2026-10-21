@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qrzterm"
-version = "0.10"
+version = "0.20"
 description = "Terminal app for QRZ.com callsign lookup and logging"
 readme = "README.md"
 license = "GPL-3.0-or-later"

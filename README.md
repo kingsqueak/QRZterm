@@ -4,7 +4,7 @@ A terminal app for [QRZ.com](https://www.qrz.com/) callsign lookup and logging, 
 
 ![QRZterm looking up W1AW](docs/qrzterm.png)
 
-Version 0.10 · Licensed under the [GPL-3.0](LICENSE).
+Version 0.20 · Licensed under the [GPL-3.0](LICENSE).
 
 The lookup, the worked check, and the log upload follow the QRZ tab in [590Ctrl](https://github.com/kingsqueak/590Ctrl). Frequency, mode, and power are typed here. 590Ctrl fills those in from the radio.
 
