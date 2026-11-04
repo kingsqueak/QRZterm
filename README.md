@@ -6,7 +6,7 @@ A terminal app for [QRZ.com](https://www.qrz.com/) callsign lookup and logging, 
 
 Version 0.20 · Licensed under the [GPL-3.0](LICENSE).
 
-The lookup, the worked check, and the log upload follow the QRZ tab in [590Ctrl](https://github.com/kingsqueak/590Ctrl). Frequency, mode, and power are typed here. 590Ctrl fills those in from the radio.
+The lookup, the worked check, and the log upload follow the QRZ tab in [590Ctrl](https://github.com/kingsqueak/590Ctrl). Frequency and mode are typed, or follow the radio over [TCI](#follow-the-radio-over-tci). Power is typed.
 
 ## Install
 
@@ -45,8 +45,21 @@ On Debian or Ubuntu, install `python3-venv` first if `python3 -m venv` says the 
 - **Log Contact** (F5) uploads the QSO. The band comes from the frequency. USB and LSB are logged as SSB with that sideband. FT4 is logged as MFSK FT4, and PSK31 as PSK PSK31. The time is the current UTC time. Name, city, grid, DXCC, state, county, and zones are copied from the lookup when it is the same call.
 - A whole number of 1000 or more in the frequency box is read as kilohertz (`14074`). A number with a decimal point is megahertz (`14.195`). **RX** is the receive frequency when you are split. Leave it blank otherwise.
 - **Account…** (F3) holds the QRZ username and password, the station callsign, your station grid, and the logbook API key.
+- **Radio…** (F4) turns on following the radio over TCI.
 
 Lookups use the [QRZ XML data service](https://www.qrz.com/docs/xml/current_spec.html). Without an XML subscription, QRZ returns only part of each record. Logging uses the [Logbook API](https://www.qrz.com/docs/logbook/QRZLogbookAPI.html) and needs a QRZ subscription. The key is under the logbook's Settings, then API. Each station callsign has its own logbook and key.
+
+## Follow the radio over TCI
+
+QRZterm can read the frequency and mode from anything that serves TCI, such as ExpertSDR, Zeus, or 590Ctrl. Open **Radio…** (F4), check **Follow the radio**, and enter the address. ExpertSDR's default is `localhost:40001`, and a port of 40001 is assumed if you leave it off. The label beside the comment box shows the link: the device name when connected, `TCI no link` while it retries every few seconds, or `TCI off`.
+
+QRZterm only listens. It sends no TCI commands, so it can't tune or key the radio. It reads the first receiver only.
+
+- **MHz** follows VFO A, and the band follows from that. When split is on, **MHz** is the transmit frequency and **RX** is VFO A. **RX** is cleared when split goes off.
+- **Mode** follows the radio. CWL and CWU are logged as CW, SAM as AM, and NFM as FM. SPEC, DRM, DSB, and WFM leave the Mode box as it was.
+- DIGU and DIGL don't say which digital mode is on the air. A digital mode already in the Mode box stays there. Otherwise the last digital mode you picked is used, starting with FT8, so check it when you are on something else.
+- A field changes only when the radio changes, so a hand edit stands until you tune or change mode. A frequency box you are typing in is left alone until you leave it.
+- The RST boxes follow the mode as they do when you pick one by hand. Power is still typed.
 
 ## Account file
 

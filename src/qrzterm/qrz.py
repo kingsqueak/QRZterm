@@ -111,8 +111,8 @@ _BANDS: tuple[tuple[int, int, str], ...] = (
     (1_240_000_000, 1_300_000_000, "23cm"),
 )
 
-# USB and LSB are explicit because this app has no radio to take the
-# sideband from. SSB is kept for a record with no sideband.
+# USB and LSB are explicit because the mode can be typed with no radio to
+# take the sideband from. SSB is kept for a record with no sideband.
 MODE_NAMES: tuple[str, ...] = (
     "USB",
     "LSB",

@@ -1,7 +1,7 @@
 """QRZterm's terminal UI.
 
 Lookup, the worked indicator, and Log Contact follow the QRZ tab in 590Ctrl.
-Frequency, mode, and power are typed here; 590Ctrl takes those from the radio.
+Frequency and mode are typed, or follow the radio over TCI. Power is typed.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import argparse
 import io
 import os
 import webbrowser
+from dataclasses import replace
 from datetime import timezone
 
 from PIL import Image as PILImage
@@ -37,6 +38,7 @@ from qrzterm.qrz import (
     adif_record,
     field_display_value,
     field_label,
+    format_mhz,
     full_name,
     grouped_fields,
     local_time,
@@ -49,7 +51,17 @@ from qrzterm.qrz import (
     split_groups,
     worked_summary,
 )
+from qrzterm.tci import (
+    DEFAULT_PORT,
+    AddressError,
+    Reading,
+    form_mode,
+    is_digital_name,
+    listen,
+    parse_address,
+)
 
+DEFAULT_TCI_ADDRESS = f"localhost:{DEFAULT_PORT}"
 OPEN_FIELDS = {"call", "email", "url", "image"}
 BADGE_LABELS = {
     "idle": "—",
@@ -177,7 +189,8 @@ class AccountScreen(ModalScreen[Account | None]):
         elif event.button.id == "save":
             event.stop()
             self.dismiss(
-                Account(
+                replace(
+                    self._account,
                     username=self.query_one("#username", Input).value.strip(),
                     password=self.query_one("#password", Input).value,
                     remember_password=self.query_one("#remember", Checkbox).value,
@@ -186,6 +199,91 @@ class AccountScreen(ModalScreen[Account | None]):
                     grid=_normalize_grid(self.query_one("#grid", Input).value),
                 )
             )
+
+
+class RadioScreen(ModalScreen[Account | None]):
+    """Whether to follow the radio over TCI, and where it is."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    DEFAULT_CSS = """
+    RadioScreen {
+        align: center middle;
+    }
+    #radio-dialog {
+        width: 60;
+        height: auto;
+        padding: 1 2;
+        border: thick $primary;
+        background: $surface;
+    }
+    #radio-dialog Input {
+        width: 100%;
+    }
+    #radio-title {
+        text-style: bold;
+        color: $primary;
+    }
+    #radio-note {
+        color: $text-muted;
+        margin: 1 0;
+    }
+    #radio-note.error {
+        color: $error;
+    }
+    #radio-buttons {
+        height: auto;
+        align: right middle;
+    }
+    #radio-buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    NOTE = "Fills in the frequency and mode. QRZterm only listens, so it can't tune or key the radio."
+
+    def __init__(self, account: Account) -> None:
+        super().__init__()
+        self._account = account
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="radio-dialog"):
+            yield Static("Radio (TCI)", id="radio-title", markup=False)
+            yield Checkbox("Follow the radio", value=self._account.tci_enabled, id="tci-enabled")
+            yield Label("TCI address")
+            yield Input(
+                value=self._account.tci_address,
+                placeholder=DEFAULT_TCI_ADDRESS,
+                id="tci-address",
+            )
+            yield Static(self.NOTE, id="radio-note", markup=False)
+            with Horizontal(id="radio-buttons"):
+                yield Button("Save", id="radio-save", variant="primary")
+                yield Button("Cancel", id="radio-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#tci-address", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "radio-cancel":
+            event.stop()
+            self.dismiss(None)
+        elif event.button.id == "radio-save":
+            event.stop()
+            enabled = self.query_one("#tci-enabled", Checkbox).value
+            address = self.query_one("#tci-address", Input).value.strip()
+            note = self.query_one("#radio-note", Static)
+            try:
+                if enabled or address:
+                    parse_address(address or DEFAULT_TCI_ADDRESS)
+            except AddressError as exc:
+                note.update(str(exc))
+                note.add_class("error")
+                return
+            self.dismiss(replace(self._account, tci_enabled=enabled, tci_address=address))
 
 
 class QrzApp(App[None]):
@@ -248,6 +346,18 @@ class QrzApp(App[None]):
     }
     #lookup-row Button {
         margin-right: 1;
+    }
+    #radio {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        color: #8d8a80;
+    }
+    #radio.up {
+        color: #7dffb3;
+    }
+    #radio.down {
+        color: #e0a030;
     }
     #mode {
         width: 16;
@@ -347,6 +457,7 @@ class QrzApp(App[None]):
         Binding("f2", "lookup", "Look up", priority=True),
         Binding("f5", "log", "Log", priority=True),
         Binding("f3", "account", "Account", priority=True),
+        Binding("f4", "radio", "Radio", priority=True),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -389,6 +500,9 @@ class QrzApp(App[None]):
         self._active_table = TABLE_IDS[0]
         self._image_url = ""
         self._just_logged: set[str] = set()
+        self._radio: Reading | None = None
+        self._radio_shown: dict[str, str] = {}
+        self._last_digital = "FT8"
         self.badge_kind = "idle"
         self.status_text = ""
         self.status_error = False
@@ -425,6 +539,12 @@ class QrzApp(App[None]):
                 compact=True,
                 tooltip="QRZ username, password, station callsign, and logbook key",
             )
+            yield Button(
+                "Radio…",
+                id="radio-setup",
+                compact=True,
+                tooltip="Follow the radio's frequency and mode over TCI",
+            )
         with Horizontal(id="qso-row"):
             yield Label("Mode")
             yield Select(
@@ -458,6 +578,7 @@ class QrzApp(App[None]):
                 tooltip="Receive frequency in MHz when split. Leave blank otherwise.",
             )
             yield Input(placeholder="Comment (optional)", id="comment", compact=True)
+            yield Static("", id="radio", markup=False)
         yield Static("", id="worked", classes="idle", markup=False)
         yield Static("", id="status", markup=False)
         with Vertical(id="results"):
@@ -483,6 +604,7 @@ class QrzApp(App[None]):
             table.add_column("Value", key="value")
         if self.load_warning:
             self._set_status(self.load_warning, error=True)
+        self._start_radio()
         call = self.query_one("#call", Input)
         if self.initial_call:
             call.value = self.initial_call
@@ -500,6 +622,7 @@ class QrzApp(App[None]):
             "lookup": self.action_lookup,
             "log": self.action_log,
             "account": self.action_account,
+            "radio-setup": self.action_radio,
             "open": self.action_open_field,
         }.get(event.button.id or "")
         if action is not None:
@@ -530,6 +653,8 @@ class QrzApp(App[None]):
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "mode" or not isinstance(event.value, str):
             return
+        if is_digital_name(event.value):
+            self._last_digital = event.value
         if not self.is_mounted:
             self._last_mode = event.value
             return
@@ -552,28 +677,30 @@ class QrzApp(App[None]):
             self._active_table = event.widget.id
             self._sync_open(event.widget)
 
+    def on_descendant_blur(self, event) -> None:
+        # A frequency box isn't changed while it's being typed in.
+        if getattr(event.widget, "id", None) in {"freq", "rx-freq"}:
+            self._apply_radio()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._open_key(event.row_key.value or "")
 
     def action_account(self) -> None:
-        if isinstance(self.screen, AccountScreen):
+        if isinstance(self.screen, ModalScreen):
             return
-        draft = Account(
-            username=self.account.username,
-            password=self.client.password,
-            remember_password=self.account.remember_password,
-            station_call=self.account.station_call,
-            logbook_key=self.account.logbook_key,
-            grid=self.account.grid,
-        )
-        self.push_screen(AccountScreen(draft), self._apply_account)
+        self.push_screen(self._draft_screen(), self._apply_account)
+
+    def action_radio(self) -> None:
+        if isinstance(self.screen, ModalScreen):
+            return
+        self.push_screen(RadioScreen(self.account), self._apply_radio_setup)
 
     def action_lookup(self) -> None:
+        if isinstance(self.screen, ModalScreen):
+            return
         call = self._call()
         if not call:
             self._set_status("Enter a callsign.", error=True)
-            return
-        if isinstance(self.screen, AccountScreen):
             return
         if not self.client.has_credentials:
             self.push_screen(self._draft_screen(), self._lookup_after_account)
@@ -581,7 +708,7 @@ class QrzApp(App[None]):
         self._begin_lookup(call)
 
     def action_log(self) -> None:
-        if isinstance(self.screen, AccountScreen):
+        if isinstance(self.screen, ModalScreen):
             return
         if not self.client.has_logbook_key or not station_callsign(self.account):
             self.push_screen(self._draft_screen(), self._log_after_account)
@@ -596,18 +723,10 @@ class QrzApp(App[None]):
         self._open_key(row_key.value or "")
 
     def _draft_screen(self) -> AccountScreen:
-        return AccountScreen(
-            Account(
-                username=self.account.username,
-                password=self.client.password,
-                remember_password=self.account.remember_password,
-                station_call=self.account.station_call,
-                logbook_key=self.account.logbook_key,
-                grid=self.account.grid,
-            )
-        )
+        return AccountScreen(replace(self.account, password=self.client.password))
 
     def _apply_account(self, account: Account | None) -> None:
+        self.call_after_refresh(self._apply_radio)
         if account is None:
             return
         self.account = account
@@ -617,6 +736,86 @@ class QrzApp(App[None]):
             save_account(account, self.config_path)
         except OSError as exc:
             self._set_status(f"Couldn't save the account: {exc}", error=True)
+
+    def _apply_radio_setup(self, account: Account | None) -> None:
+        if account is None:
+            self.call_after_refresh(self._apply_radio)
+            return
+        account = replace(account, password=self.client.password)
+        self.account = account
+        try:
+            save_account(account, self.config_path)
+        except OSError as exc:
+            self._set_status(f"Couldn't save the radio settings: {exc}", error=True)
+        self.call_after_refresh(self._start_radio)
+
+    def _start_radio(self) -> None:
+        self.workers.cancel_group(self, "tci")
+        self._radio = None
+        self._radio_shown = {}
+        if not self.account.tci_enabled:
+            self._set_radio_link("off", "TCI off")
+            return
+        try:
+            host, port = parse_address(self.account.tci_address or DEFAULT_TCI_ADDRESS)
+        except AddressError as exc:
+            self._set_radio_link("down", "TCI bad address")
+            self._set_status(str(exc), error=True)
+            return
+        self._set_radio_link("down", "TCI connecting")
+        self.run_worker(
+            listen(host, port, self._on_radio_reading, self._on_radio_link),
+            group="tci",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def _on_radio_link(self, up: bool, detail: str) -> None:
+        if up:
+            self._set_radio_link("up", f"TCI {detail}".strip())
+        else:
+            self._set_radio_link("down", "TCI no link")
+
+    def _set_radio_link(self, kind: str, text: str) -> None:
+        # The label is on the main screen, which a dialog may be covering.
+        label = self.screen_stack[0].query_one("#radio", Static)
+        label.update(text)
+        label.set_class(kind == "up", "up")
+        label.set_class(kind == "down", "down")
+
+    def _on_radio_reading(self, reading: Reading) -> None:
+        self._radio = reading
+        self._apply_radio()
+
+    def _apply_radio(self) -> None:
+        """Copy what changed on the radio into the form.
+
+        Only a change is copied, because some servers repeat their state
+        constantly and a hand edit has to stand until the radio moves. With a
+        dialog open this waits until the dialog closes.
+        """
+        reading = self._radio
+        if reading is None or len(self.screen_stack) > 1:
+            return
+        self._set_radio_box("freq", format_mhz(reading.tx_hz) if reading.tx_hz else "")
+        self._set_radio_box("rx-freq", format_mhz(reading.rx_hz) if reading.rx_hz else "")
+        if reading.modulation == self._radio_shown.get("mode"):
+            return
+        self._radio_shown["mode"] = reading.modulation
+        select = self.query_one("#mode", Select)
+        current = select.value if isinstance(select.value, str) else ""
+        wanted = form_mode(reading.modulation, current, self._last_digital)
+        if wanted and wanted != current:
+            select.value = wanted
+
+    def _set_radio_box(self, widget_id: str, text: str) -> None:
+        if text == self._radio_shown.get(widget_id, ""):
+            return
+        box = self.query_one(f"#{widget_id}", Input)
+        if box.has_focus:
+            return
+        box.value = text
+        self._radio_shown[widget_id] = text
 
     def _lookup_after_account(self, account: Account | None) -> None:
         self._apply_account(account)

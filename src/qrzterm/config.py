@@ -24,6 +24,8 @@ class Account:
     station_call: str = ""
     logbook_key: str = ""
     grid: str = ""
+    tci_enabled: bool = False
+    tci_address: str = ""
 
 
 def config_path() -> Path:
@@ -61,6 +63,8 @@ def load_account(path: Path | None = None) -> Account:
         station_call=str(data.get("station_call", "")).strip().upper(),
         logbook_key=str(data.get("logbook_key", "")).strip(),
         grid=str(data.get("grid", "")).strip(),
+        tci_enabled=bool(data.get("tci_enabled", False)),
+        tci_address=str(data.get("tci_address", "")).strip(),
     )
 
 
@@ -74,6 +78,8 @@ def save_account(account: Account, path: Path | None = None) -> None:
         "station_call": account.station_call.strip().upper(),
         "logbook_key": account.logbook_key.strip(),
         "grid": account.grid.strip(),
+        "tci_enabled": bool(account.tci_enabled),
+        "tci_address": account.tci_address.strip(),
     }
     if account.remember_password:
         payload["password"] = account.password
