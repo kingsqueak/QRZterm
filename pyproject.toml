@@ -10,7 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-authors = [{ name = "KC2RGW Chris Esser", email = "kc2rgw@gmail.com" }]
+authors = [{ name = "KC2RGW Chris Esser", email = "kc2rgw@radiopathology.com" }]
 keywords = ["qrz", "hamradio", "amateur-radio", "tui"]
 classifiers = [
     "Environment :: Console",
